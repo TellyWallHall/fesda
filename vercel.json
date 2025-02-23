@@ -1,6 +1,5 @@
 {
-  "routes": [
-    { "src": "/api/proxy", "dest": "/api/proxy.js" },
-    { "src": "/(.*)", "dest": "/public/index.html" }
-  ]
+    "routes": [
+        { "src": "/api/proxy", "dest": "/api/proxy.js" }
+    ]
 }
