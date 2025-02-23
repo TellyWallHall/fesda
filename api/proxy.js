@@ -1,46 +1,75 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Vercel Proxy</title>
-    <style>
-        body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
-        #nav { margin-bottom: 20px; }
-        #urlInput { width: 300px; padding: 5px; }
-        #content { border: 1px solid #ccc; padding: 10px; }
-    </style>
-</head>
-<body>
-    <div id="nav">
-        <form onsubmit="loadUrl(event)">
-            <input type="url" id="urlInput" placeholder="Enter URL (e.g., https://example.com)" required>
-            <button type="submit">Go</button>
-        </form>
-    </div>
-    <div id="content"></div>
+const fetch = require('node-fetch');
+const { URL } = require('url');
 
-    <script>
-        async function loadUrl(e) {
-            e.preventDefault();
-            const url = document.getElementById('urlInput').value;
-            const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
-            history.pushState({}, '', `?url=${encodeURIComponent(url)}`);
-            
-            try {
-                const response = await fetch(proxyUrl);
-                const html = await response.text();
-                document.getElementById('content').innerHTML = html;
-            } catch (error) {
-                document.getElementById('content').innerHTML = `Error loading page: ${error}`;
+module.exports = async (req, res) => {
+    try {
+        // Set CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+
+        // Handle OPTIONS requests
+        if (req.method === 'OPTIONS') {
+            return res.status(200).end();
+        }
+
+        // Validate URL parameter
+        const targetUrl = req.query.url;
+        if (!targetUrl) {
+            return res.status(400).json({ error: 'Missing URL parameter' });
+        }
+
+        // Parse and validate URL
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(targetUrl);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                throw new Error('Invalid protocol');
             }
+        } catch (error) {
+            return res.status(400).json({ error: 'Invalid URL' });
         }
 
-        // Initial load from URL parameter
-        const urlParams = new URLSearchParams(window.location.search);
-        const initialUrl = urlParams.get('url');
-        if (initialUrl) {
-            document.getElementById('urlInput').value = initialUrl;
-            loadUrl(new Event('init'));
+        // Fetch target content
+        const response = await fetch(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        });
+
+        // Get content type
+        const contentType = response.headers.get('content-type') || 'text/html';
+        res.setHeader('Content-Type', contentType);
+
+        // Handle HTML content
+        if (contentType.includes('text/html')) {
+            const content = await response.text();
+            const proxyBase = `${req.headers['x-forwarded-proto']}://${req.headers['host']}/api/proxy?url=`;
+
+            // Rewrite URLs
+            const processed = content
+                .replace(/(href|src|action)=["'](.*?)["']/gi, (_, attr, value) => {
+                    try {
+                        const resolved = new URL(value, targetUrl).href;
+                        return `${attr}="${proxyBase}${encodeURIComponent(resolved)}"`;
+                    } catch {
+                        return `${attr}="${value}"`;
+                    }
+                });
+
+            return res.send(processed);
         }
-    </script>
-</body>
-</html>
+
+        // Handle other content types (images, CSS, etc.)
+        const buffer = await response.arrayBuffer();
+        res.send(Buffer.from(buffer));
+
+    } catch (error) {
+        // Ensure CORS headers are set for errors
+        res.setHeader('Content-Type', 'application/json');
+        res.status(500).json({ 
+            error: error.message,
+            ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+        });
+    }
+};
